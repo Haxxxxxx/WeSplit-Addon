@@ -1,0 +1,494 @@
+@import "tailwindcss";
+
+/* ============================================================
+   FONT LOADING — Satoshi (body) + DM Mono (numbers fallback)
+   Satoshi: Free from Fontshare (Indian Type Foundry)
+   DM Mono: Free from Google Fonts
+   Archivo Semi Condensed: Google Fonts (display headings)
+   SF Compact: Apple system font — available on macOS/iOS only
+   ============================================================ */
+
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@400,500,600,700,400i,500i,600i,700i&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Archivo+Semi+Condensed:wght@400;500;600;700&display=swap');
+
+/* ============================================================
+   WESPLIT DESIGN SYSTEM — CSS Custom Properties
+   Source of truth: WeSplit/src/theme/colors.ts + spacing.ts
+
+   IMPORTANT: These are defined on :root, NOT in @theme.
+   Putting --spacing-*, --radius-*, --font-size-* etc. inside
+   @theme would override Tailwind v4's built-in utility values
+   (e.g. max-w-sm would become 0.5rem instead of 24rem).
+   ============================================================ */
+
+:root {
+  /* ----------------------------------------------------------
+     COLORS — Dark theme defaults
+     ---------------------------------------------------------- */
+
+  /* Backgrounds */
+  --color-bg: #061113;
+  --color-surface: #121D1F;
+  --color-surface-alt: #121D1F;
+  --color-surface-elevated: #1A2628;
+  --color-card: #121D1F;
+
+  /* Black scale (from colors.ts) */
+  --color-black: #061113;
+  --color-black-overlay: rgba(0, 0, 0, 0.65);
+  --color-black-80: rgba(6, 17, 19, 0.80);
+  --color-black-70: rgba(6, 17, 19, 0.70);
+  --color-black-20: rgba(6, 17, 19, 0.20);
+  --color-black-15: rgba(6, 17, 19, 0.15);
+  --color-black-white-5: #121D1F;
+  --color-black-green: #363F2C;
+
+  /* White scale */
+  --color-white: #FFFFFF;
+  --color-white-5: rgba(255, 255, 255, 0.05);
+  --color-white-10: rgba(255, 255, 255, 0.10);
+  --color-white-20: rgba(255, 255, 255, 0.20);
+  --color-white-30: rgba(255, 255, 255, 0.30);
+  --color-white-50: rgba(255, 255, 255, 0.50);
+  --color-white-70: rgba(255, 255, 255, 0.70);
+  --color-white-80: rgba(255, 255, 255, 0.80);
+
+  /* Text */
+  --color-text: #FFFFFF;
+  --color-text-secondary: rgba(255, 255, 255, 0.70);
+  --color-text-tertiary: rgba(255, 255, 255, 0.50);
+  --color-text-disabled: rgba(255, 255, 255, 0.30);
+
+  /* Border */
+  --color-border: rgba(255, 255, 255, 0.10);
+  --color-border-strong: rgba(255, 255, 255, 0.20);
+
+  /* Brand — green */
+  --color-primary: #A5EA15;
+  --color-primary-dim: rgba(165, 234, 21, 0.20);
+  --color-primary-20: rgba(165, 234, 21, 0.20);
+  --color-primary-end: #53EF97;
+  --color-green: #A5EA15;
+  --color-green-light: rgba(165, 234, 21, 0.20);
+  --color-green-bg: #363F2C;
+
+  /* Brand — greenBlue */
+  --color-green-blue: #53EF97;
+  --color-green-blue-20: rgba(83, 239, 119, 0.20);
+
+  /* Gradient endpoints */
+  --color-gradient-start: #A5EA15;
+  --color-gradient-end: #53EF97;
+
+  /* Semantic */
+  --color-success: #53EF97;
+  --color-success-20: rgba(83, 239, 119, 0.20);
+  --color-error: #DC3434;
+  --color-error-20: rgba(220, 52, 52, 0.20);
+  --color-warning: #FFD700;
+  --color-warning-20: rgba(255, 215, 0, 0.20);
+  --color-info: #2196F3;
+  --color-info-20: rgba(33, 150, 243, 0.20);
+  --color-orange: #FF7700;
+  --color-orange-20: rgba(255, 119, 0, 0.20);
+
+  /* Partners */
+  --color-spend-start: #2EC4B6;
+  --color-spend-end: #20A4F3;
+
+  /* Wallet customization palette */
+  --color-wallet-purple: #9B59B6;
+  --color-wallet-green: #2ECC71;
+  --color-wallet-orange: #E67E22;
+  --color-wallet-blue: #3498DB;
+  --color-wallet-red: #E74C3C;
+  --color-wallet-magenta: #E91E63;
+  --color-wallet-pink: #EC407A;
+  --color-wallet-teal: #1ABC9C;
+  --color-wallet-yellow: #F1C40F;
+  --color-wallet-indigo: #5C6BC0;
+  --color-wallet-cyan: #00BCD4;
+  --color-wallet-amber: #FFC107;
+
+  /* ----------------------------------------------------------
+     TYPOGRAPHY
+     ---------------------------------------------------------- */
+
+  --font-family-body: 'Satoshi', 'Inter', system-ui, sans-serif;
+  --font-family-display: 'Archivo Semi Condensed', 'Satoshi', 'Inter', system-ui, sans-serif;
+  --font-family-number: 'SF Compact', 'SF Compact Display', 'SF Pro Display', 'DM Mono', system-ui, sans-serif;
+  --font-family-mono: 'SF Mono', 'Fira Code', 'DM Mono', monospace;
+
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-md: 1rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.25rem;
+  --font-size-2xl: 1.375rem;
+  --font-size-3xl: 1.625rem;
+  --font-size-4xl: 2rem;
+  --font-size-5xl: 2.1875rem;
+  --font-size-6xl: 2.5rem;
+  --font-size-7xl: 3.125rem;
+
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --line-height-tight: 1.2;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.6;
+
+  /* Typography — heading styles (aligned with mobile RN theme) */
+  --font-size-h1: 2.1875rem;        /* 35px — mobile h1 */
+  --font-size-h2: 1.375rem;         /* 22px — mobile h2 */
+  --font-size-h3: 1rem;             /* 16px — mobile h3 */
+
+  /* Typography — number/balance styles (aligned with mobile RN theme) */
+  --font-size-balance: 2.5rem;      /* 40px — main wallet balance */
+  --font-size-send-amount: 3.125rem; /* 50px — send flow amount input */
+  --font-size-big-number: 1.875rem;  /* 30px — secondary large number */
+
+  /* ----------------------------------------------------------
+     SPACING
+     ---------------------------------------------------------- */
+
+  --spacing-xs: 0.25rem;
+  --spacing-sm: 0.5rem;
+  --spacing-item: 0.75rem;
+  --spacing-md: 1rem;
+  --spacing-lg: 1.5rem;
+  --spacing-xl: 2rem;
+  --spacing-xxl: 2.5rem;
+  --spacing-xxxl: 3rem;
+
+  /* ----------------------------------------------------------
+     BORDER RADIUS
+     ---------------------------------------------------------- */
+
+  --radius-sm: 0.5rem;      /* 8px — mobile radiusSm */
+  --radius-md: 0.75rem;     /* 12px — mobile radiusMd */
+  --radius-lg: 1rem;        /* 16px — mobile radiusLg */
+  --radius-xl: 1.25rem;     /* 20px — mobile radiusXl */
+  --radius-2xl: 1.5rem;
+  --radius-3xl: 2rem;
+  --radius-pill: 3rem;      /* 48px — mobile radiusRound (50px) */
+  --radius-full: 9999px;
+
+  /* ----------------------------------------------------------
+     COMPONENT HEIGHTS (aligned with mobile spacing.ts)
+     ---------------------------------------------------------- */
+
+  --height-button: 3rem;          /* 48px — mobile buttonHeight */
+  --height-button-sm: 2.25rem;    /* 36px */
+  --height-button-lg: 3.5rem;     /* 56px */
+  --height-input: 3rem;           /* 48px — mobile inputHeight */
+  --height-input-sm: 2.5rem;      /* 40px */
+  --height-input-lg: 3.5rem;      /* 56px */
+  --height-slider: 3.75rem;       /* 60px — mobile sliderHeight */
+  --height-slider-thumb: 3.25rem; /* 52px — mobile sliderThumbSize */
+
+  /* ----------------------------------------------------------
+     ICON SIZES (aligned with mobile spacing.ts)
+     ---------------------------------------------------------- */
+
+  --icon-size-sm: 1rem;      /* 16px — mobile iconSmallSize */
+  --icon-size-md: 1.25rem;   /* 20px — mobile iconMediumSize */
+  --icon-size: 1.5rem;       /* 24px — mobile iconRegularSize */
+  --icon-size-lg: 2rem;      /* 32px — mobile iconBigSize */
+  --icon-size-xl: 2.75rem;   /* 44px — mobile iconBoxSize */
+
+  /* ----------------------------------------------------------
+     SHADOWS
+     ---------------------------------------------------------- */
+
+  --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.10);
+  --shadow-card-hover: 0 8px 32px rgba(165, 234, 21, 0.10);
+  --shadow-green-glow:
+    0 1px 3px 0 rgba(83, 239, 151, 0.24),
+    0 2px 6px 0 rgba(83, 239, 151, 0.24),
+    0 4px 8px 0 rgba(83, 239, 151, 0.12),
+    0 16px 32px -8px rgba(83, 239, 151, 0.48);
+  --shadow-primary-glow:
+    0 1px 3px 0 rgba(165, 234, 21, 0.24),
+    0 2px 6px 0 rgba(165, 234, 21, 0.24),
+    0 4px 8px 0 rgba(165, 234, 21, 0.12),
+    0 16px 32px -8px rgba(165, 234, 21, 0.40);
+  --shadow-modal: 0 24px 80px rgba(0, 0, 0, 0.60);
+
+  /* ----------------------------------------------------------
+     ANIMATION DURATIONS
+     ---------------------------------------------------------- */
+
+  --duration-fast: 150ms;
+  --duration-normal: 200ms;
+  --duration-slow: 300ms;
+  --duration-slower: 400ms;
+
+  /* ----------------------------------------------------------
+     Z-INDEX SCALE
+     ---------------------------------------------------------- */
+
+  --z-base: 0;
+  --z-dropdown: 10;
+  --z-sticky: 20;
+  --z-modal: 50;
+  --z-toast: 60;
+  --z-tooltip: 70;
+}
+
+/* ============================================================
+   LIGHT THEME OVERRIDES
+   ============================================================ */
+
+[data-theme="light"] {
+  --color-bg: #FFFFFF;
+  --color-surface: #F5F5F5;
+  --color-surface-alt: #EBEBEB;
+  --color-surface-elevated: #E8E8E8;
+  --color-card: #F5F5F5;
+  --color-text: #061113;
+  --color-text-secondary: rgba(6, 17, 19, 0.70);
+  --color-text-tertiary: rgba(6, 17, 19, 0.50);
+  --color-text-disabled: rgba(6, 17, 19, 0.30);
+  --color-border: rgba(6, 17, 19, 0.10);
+  --color-border-strong: rgba(6, 17, 19, 0.20);
+
+  --color-white-5: rgba(6, 17, 19, 0.05);
+  --color-white-10: rgba(6, 17, 19, 0.10);
+  --color-white-20: rgba(6, 17, 19, 0.20);
+  --color-white-30: rgba(6, 17, 19, 0.30);
+  --color-white-50: rgba(6, 17, 19, 0.50);
+  --color-white-70: rgba(6, 17, 19, 0.70);
+  --color-white-80: rgba(6, 17, 19, 0.80);
+
+  --shadow-card: 0 8px 32px rgba(6, 17, 19, 0.08);
+  --shadow-card-hover: 0 8px 32px rgba(165, 234, 21, 0.15);
+}
+
+/* ============================================================
+   BASE STYLES
+   ============================================================ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  /* scroll-behavior: smooth — removed to avoid Next.js route transition delays */
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-family-body);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-normal);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Focus ring */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Selection */
+::selection {
+  background-color: var(--color-primary-dim);
+  color: var(--color-text);
+}
+
+/* ============================================================
+   SCROLLBAR STYLING
+   ============================================================ */
+
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-surface);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-white-20);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-white-30);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-white-20) var(--color-surface);
+}
+
+/* ============================================================
+   GRADIENT UTILITIES
+   ============================================================ */
+
+.gradient-brand {
+  background: linear-gradient(90deg, var(--color-gradient-start), var(--color-gradient-end));
+}
+
+.gradient-brand-vertical {
+  background: linear-gradient(180deg, var(--color-gradient-start), var(--color-gradient-end));
+}
+
+.gradient-brand-diagonal {
+  background: linear-gradient(135deg, var(--color-gradient-start), var(--color-gradient-end));
+}
+
+.gradient-text {
+  background: linear-gradient(90deg, var(--color-gradient-start), var(--color-gradient-end));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.gradient-border {
+  position: relative;
+}
+
+.gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, var(--color-gradient-start), var(--color-gradient-end));
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.gradient-spend {
+  background: linear-gradient(90deg, var(--color-spend-start), var(--color-spend-end));
+}
+
+/* ============================================================
+   SKELETON ANIMATION
+   ============================================================ */
+
+@keyframes skeleton-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton {
+  background: var(--color-white-10);
+  border-radius: var(--radius-md);
+  animation: skeleton-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--color-white-5) 25%,
+    var(--color-white-10) 50%,
+    var(--color-white-5) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  border-radius: var(--radius-md);
+}
+
+/* ============================================================
+   MISC UTILITY ANIMATIONS
+   ============================================================ */
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.animate-fade-in   { animation: fade-in   var(--duration-normal) ease-out both; }
+.animate-slide-up  { animation: slide-up  var(--duration-slow)   ease-out both; }
+.animate-slide-down { animation: slide-down var(--duration-slow)  ease-out both; }
+.animate-scale-in  { animation: scale-in  var(--duration-normal) ease-out both; }
+.animate-spin      { animation: spin 1s linear infinite; }
+
+/* ============================================================
+   TELEGRAM PAGE TRANSITIONS
+   ============================================================ */
+
+@keyframes tg-push {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes tg-pop {
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes tg-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.tg-page-enter-push { animation: tg-push 250ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both; }
+.tg-page-enter-pop  { animation: tg-pop  200ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both; }
+.tg-page-enter-fade { animation: tg-fade 200ms ease-out both; }
+
+/* Green glow utility */
+.shadow-green-glow {
+  box-shadow: var(--shadow-green-glow);
+}
+
+.shadow-primary-glow {
+  box-shadow: var(--shadow-primary-glow);
+}

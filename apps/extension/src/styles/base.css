@@ -1,0 +1,147 @@
+/**
+ * Base Styles
+ *
+ * Contains: Reset, Font Faces, CSS Variables, and Base Element Styles
+ * These styles provide the foundation for the WeSplit browser addon.
+ */
+
+/* ============================================
+   Font Faces - Satoshi
+   ============================================ */
+@font-face {
+  font-family: 'Satoshi';
+  src: url('../assets/fonts/Satoshi/Satoshi-Light.otf') format('opentype');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Satoshi';
+  src: url('../assets/fonts/Satoshi/Satoshi-Regular.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Satoshi';
+  src: url('../assets/fonts/Satoshi/Satoshi-Medium.otf') format('opentype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Satoshi';
+  src: url('../assets/fonts/Satoshi/Satoshi-Bold.otf') format('opentype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Satoshi';
+  src: url('../assets/fonts/Satoshi/Satoshi-Black.otf') format('opentype');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ============================================
+   Font Faces - Archivo SemiExpanded
+   ============================================ */
+@font-face {
+  font-family: 'Archivo SemiExpanded';
+  src: url('../assets/fonts/Archivo_SemiExpanded/Archivo_SemiExpanded-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Archivo SemiExpanded';
+  src: url('../assets/fonts/Archivo_SemiExpanded/Archivo_SemiExpanded-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Archivo SemiExpanded';
+  src: url('../assets/fonts/Archivo_SemiExpanded/Archivo_SemiExpanded-SemiBold.ttf') format('truetype');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Archivo SemiExpanded';
+  src: url('../assets/fonts/Archivo_SemiExpanded/Archivo_SemiExpanded-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ============================================
+   CSS Variables
+
+   These map to Tailwind colors in tailwind.config.js
+   Kept for backwards compatibility and CSS-only usage
+   ============================================ */
+:root {
+  /* Primary Brand Colors */
+  --green: #A5EA15;
+  --greenBlue: #53EF97;
+
+  /* Background Colors */
+  --bg-color: #020300;
+  --black: #061113;
+
+  /* White Colors */
+  --white: #fff;
+  --white-5: rgba(255, 255, 255, 0.05);
+  --white-10: rgba(255, 255, 255, 0.10);
+  --white-20: rgba(255, 255, 255, 0.20);
+  --white-30: rgba(255, 255, 255, 0.30);
+  --white-50: rgba(255, 255, 255, 0.50);
+  --white-60: rgba(255, 255, 255, 0.60);
+  --white-70: rgba(255, 255, 255, 0.70);
+  --white-80: rgba(255, 255, 255, 0.80);
+
+  /* Green Opacity */
+  --green-10: rgba(165, 234, 21, 0.1);
+
+  /* Semantic Colors */
+  --error: #DC3434;
+  --warning: #FFD700;
+  --info: #2196F3;
+}
+
+/* ============================================
+   Reset & Base Styles
+   ============================================ */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Satoshi', system-ui, sans-serif;
+  background-color: var(--bg-color);
+  color: white;
+  width: 400px;
+  min-height: 600px;
+  max-height: 600px;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Chrome Extension Popup Container */
+#root {
+  width: 400px;
+  height: 600px;
+  overflow: hidden;
+}

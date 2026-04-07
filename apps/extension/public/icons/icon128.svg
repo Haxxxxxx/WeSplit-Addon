@@ -1,0 +1,10 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="128" height="128" rx="28" fill="url(#gradient128)"/>
+  <text x="64" y="84" text-anchor="middle" font-family="Arial" font-weight="bold" font-size="64" fill="#061113">W</text>
+  <defs>
+    <linearGradient id="gradient128" x1="0" y1="0" x2="128" y2="128" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A5EA15"/>
+      <stop offset="1" stop-color="#53EF97"/>
+    </linearGradient>
+  </defs>
+</svg>

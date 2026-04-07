@@ -1,0 +1,18 @@
+/**
+ * WeSplit Addon Styles
+ *
+ * Main entry point for all styles.
+ *
+ * Note: @import statements must come before @tailwind directives.
+ * Tailwind processes these imports at build time via PostCSS.
+ */
+
+/* Import WeSplit base styles first */
+@import './base.css';
+@import './components.css';
+@import './utilities.css';
+
+/* Tailwind CSS - processed after imports */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

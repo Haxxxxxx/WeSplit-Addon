@@ -1,0 +1,1155 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===== ADMIN HELPER FUNCTION =====
+    // Check if user is authenticated with @wesplit.io email (Google Sign-In)
+    // Used by admin dashboard to read all data for analytics
+    // 🔒 SECURITY FIX P1-4: Added email_verified check to prevent spoofing
+    function isWeSplitAdmin() {
+      return request.auth != null
+        && request.auth.token.email != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email.matches('.*@wesplit[.]io$');
+    }
+
+    // Users collection - allow authenticated users to read any user document
+    // This is necessary for:
+    // 1. Users reading their own document (by user ID)
+    // 2. Contact resolution (querying by email/wallet address)
+    // 3. User lookup for transactions, splits, etc.
+    // 4. Referral code validation (querying by referral_code field)
+    // Note: Queries are limited to 1 result in application code for privacy
+    //
+    // 🔒 SECURITY P2-1: This rule allows ANY authenticated user to read ANY user document
+    // and enumerate all users in the database. This is required for client-side contact
+    // resolution queries (.where('email', '==', x) or .where('wallet_address', '==', y)).
+    //
+    // Recommended fix: Move contact resolution to Cloud Functions to prevent user enumeration.
+    // This requires refactoring ~15 call sites in the mobile app. Track in backlog.
+    //
+    // Mitigation: PII sanitization in logs (Task #56) reduces blast radius.
+    match /users/{userId} {
+      // Allow authenticated users to read any user document (including queries)
+      allow read: if request.auth != null;
+
+      // Users can create their own document (when document doesn't exist yet)
+      allow create: if request.auth != null && request.auth.uid == userId;
+
+      // Users can update their own document when NOT touching server-managed fields
+      // 🔒 SECURITY: Points fields — only increment via dedicated rule below or Admin SDK
+      // 🔒 SECURITY: Tapestry fields — only written by tapestrySync CF (Admin SDK)
+      //    Prevents client from forging tapestry_profile_id to impersonate another user
+      // 🔒 SECURITY: Matrica fields — only written by exchangeMatricaOAuthCode CF (Admin SDK)
+      // 🔒 SECURITY: Server-managed fields blocked from client writes:
+      // - points/total_points_earned: Only via CFs or capped increment rule below
+      // - is_partnership: Controls 2x reward rate — admin-only
+      // - active_badge: Controls 2x community badge multiplier — CF-only
+      // - referred_by/referral_code/referral_count: Referral integrity — CF-only
+      // - tapestry/matrica: Integration fields — CF-only
+      allow update: if request.auth != null && request.auth.uid == userId
+        && !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny([
+              'points', 'total_points_earned',
+              'is_partnership', 'active_badge',
+              'referred_by', 'referral_code', 'referral_count',
+              'tapestry_profile_id', 'tapestry_username', 'tapestry_linked_at',
+              'tapestry_consent', 'tapestry_consent_at',
+              'matrica_username', 'matrica_profile_picture', 'matrica_wallets', 'matrica_linked_at'
+            ]);
+
+      // 🔒 SECURITY: Points updates are allowed ONLY when incrementing (monotonic increase)
+      // This allows increment() from badge/referral flows while blocking arbitrary set values
+      // Quest completion and transaction points go through Cloud Functions (Admin SDK)
+      // 🔒 SECURITY FIX M-11: Cap points increment per operation to 100 to prevent
+      // self-award abuse (e.g. a tampered client sending points: currentPoints + 1,000,000).
+      allow update: if request.auth != null && request.auth.uid == userId
+        && request.resource.data.points >= resource.data.points
+        && request.resource.data.total_points_earned >= resource.data.total_points_earned
+        && request.resource.data.points - resource.data.points <= 100
+        && request.resource.data.total_points_earned - resource.data.total_points_earned <= 100;
+
+      // Users cannot delete their own document (for data retention)
+      allow delete: if false;
+    }
+
+    // Verification codes — require authentication for creates
+    match /verificationCodes/{docId} {
+      allow create: if request.auth != null;
+      // Admin dashboard can read all verification codes
+      allow read: if isWeSplitAdmin();
+      allow read, update, delete: if request.auth != null &&
+        resource.data.email == request.auth.token.email;
+    }
+
+    // Groups can be read by members and written by owners
+    match /groups/{groupId} {
+      // Admin can read all groups for analytics
+      allow read: if isWeSplitAdmin();
+      allow read: if request.auth != null &&
+        request.auth.uid in resource.data.members;
+      allow write: if request.auth != null &&
+        request.auth.uid == resource.data.ownerId;
+    }
+
+    // Expenses can be read by group members and written by the creator
+    match /expenses/{expenseId} {
+      // Admin can read all expenses for analytics
+      allow read: if isWeSplitAdmin();
+      allow read: if request.auth != null &&
+        request.auth.uid in get(/databases/$(database)/documents/groups/$(resource.data.groupId)).data.members;
+      allow write: if request.auth != null &&
+        request.auth.uid == resource.data.createdBy;
+    }
+
+    // Split wallets (ARCHIVED feature — SharedWallets is the active replacement)
+    // Reads: auth-only (many legacy query patterns, not worth refactoring)
+    // Writes: creator-only (prevents any authed user from tampering with other users' wallets)
+    match /splitWallets/{splitWalletId} {
+      allow read: if isWeSplitAdmin();
+      allow read: if request.auth != null;
+
+      allow create: if request.auth != null &&
+        request.resource.data.creatorId == request.auth.uid;
+      allow update: if request.auth != null &&
+        resource.data.creatorId == request.auth.uid;
+      allow delete: if request.auth != null &&
+        resource.data.creatorId == request.auth.uid;
+    }
+
+    // Split wallet private keys - CRITICAL: Restrict to wallet participants only
+    // New documents include a flat 'participantIds' array for rule enforcement
+    // Legacy documents without participantIds fall back to auth-only (migration period)
+    // Defense in depth: encrypted keys + auth + participant check + app config for decryption
+    // NOTE: Admin should NOT have read access to private keys
+    match /splitWalletPrivateKeys/{splitWalletId} {
+      // Only participants can read the encrypted private key document
+      // SECURITY: Legacy fallback removed — all docs MUST have participantIds
+      allow read: if request.auth != null &&
+        request.auth.uid in resource.data.participantIds;
+
+      // Only allow creation if the caller is in the participantIds array
+      allow create: if request.auth != null &&
+        request.auth.uid in request.resource.data.participantIds;
+
+      // SECURITY: Client-side updates DENIED. All participant management
+      // (adding/removing members) goes through Cloud Functions with Admin SDK.
+      // This prevents participants from modifying participantIds directly.
+      allow update: if false;
+
+      // 🔒 SECURITY FIX P2-4: Only creator can delete (prevents griefing/sabotage)
+      // Wallet deletion flow should require creator authorization, not just any participant
+      // If deleted by non-creator, wallet becomes permanently inaccessible
+      allow delete: if request.auth != null &&
+        request.auth.uid in resource.data.participantIds &&
+        resource.data.creatorId == request.auth.uid;
+    }
+
+    // Referrals - restrict access to involved users only
+    match /referrals/{referralId} {
+      // Admin can read all referrals for analytics
+      allow read: if isWeSplitAdmin();
+
+      // Allow read if the authenticated user is either the referrer or the referred user
+      allow read: if request.auth != null &&
+        (request.auth.uid == resource.data.referrerId ||
+         request.auth.uid == resource.data.referredUserId);
+
+      // Allow create if the authenticated user is the referred user
+      allow create: if request.auth != null &&
+        request.auth.uid == request.resource.data.referredUserId;
+
+      // 🔒 SECURITY: Referral updates locked to server-only (Admin SDK) to prevent
+      // clients from modifying milestones, rewardsAwarded, or referral state
+      allow update: if false;
+      // PREVIOUS (vulnerable): Allow updates for involved users — no field restrictions
+      // allow update: if request.auth != null &&
+      //   (request.auth.uid == resource.data.referrerId ||
+      //    request.auth.uid == resource.data.referredUserId);
+
+      // Deletions should generally be done via privileged backend code
+      allow delete: if false;
+    }
+
+    // Badges collection - public read for all badges, admin-only write
+    match /badges/{badgeId} {
+      // Anyone can read badges (needed for redeem code lookup)
+      allow read: if true;
+
+      // Only WeSplit admins can create/update/delete badge definitions
+      allow write: if isWeSplitAdmin();
+    }
+
+    // Badge images collection - public read, admin-only write
+    match /badge_images/{badgeId} {
+      allow read: if true;
+      allow write: if isWeSplitAdmin();
+    }
+
+    // Promo banners - authenticated users can read, admin-only write
+    match /promoBanners/{bannerId} {
+      allow read: if request.auth != null;
+      allow write: if isWeSplitAdmin();
+    }
+
+    // User badges subcollection - public read for profile display
+    // 🔒 SECURITY: Write validation ensures clients can only claim badges properly:
+    // - Must have badgeId, claimed=true, title, description fields
+    // - Points must be a number (prevents arbitrary inflation)
+    // - Cannot delete badge claims (append-only)
+    match /users/{userId}/badges/{badgeId} {
+      // Admin can read all user badges for analytics
+      allow read: if isWeSplitAdmin() || request.auth != null;
+
+      // Users can create badge claims with required fields
+      allow create: if request.auth != null && request.auth.uid == userId
+        && request.resource.data.badgeId is string
+        && request.resource.data.claimed == true
+        && request.resource.data.title is string
+        && request.resource.data.description is string
+        && request.resource.data.points is number
+        && request.resource.data.points >= 0
+        && request.resource.data.points <= 1000;
+
+      // Users can update their own badge claims (e.g., set imageUrl after claim)
+      // but cannot change claimed status back to false or modify points
+      allow update: if request.auth != null && request.auth.uid == userId
+        && request.resource.data.claimed == true
+        && request.resource.data.points == resource.data.points;
+
+      // No deletes — badge claims are permanent
+      allow delete: if false;
+    }
+
+    // NFT verification cache subcollection
+    // ✅ SECURITY FIX: Prevent client-side cache poisoning
+    // Clients can read their own verification cache, but only server can write
+    // This prevents users from forging MSB ownership by writing fake verification docs
+    match /users/{userId}/nftVerifications/{verificationId} {
+      allow read: if isWeSplitAdmin() || (request.auth != null && request.auth.uid == userId);
+      // ✅ CRITICAL: Write access only from server-side (Admin SDK)
+      // Client-side writes would allow users to bypass NFT ownership verification
+      allow write: if false;  // Only server-side writes via Admin SDK
+    }
+
+    // User quests subcollection — server-side only writes via completeQuestServer
+    // 🔒 SECURITY: Quest completion goes through Cloud Function to prevent
+    // client-side self-completion (mark any quest as done + award free points)
+    match /users/{userId}/quests/{questId} {
+      // Admin can read all quest progress for analytics
+      allow read: if isWeSplitAdmin();
+      allow read: if request.auth != null && request.auth.uid == userId;
+
+      // All writes go through Admin SDK (Cloud Functions)
+      allow create, update: if false;
+      allow delete: if false;
+    }
+
+    // User metadata subcollection
+    // 🔒 SECURITY: badge_metrics is read-only for clients — prevents inflating metrics
+    // to claim unearned badges. Metrics are computed from real transaction data.
+    match /users/{userId}/metadata/badge_metrics {
+      allow read: if isWeSplitAdmin() || (request.auth != null && request.auth.uid == userId);
+      allow write: if false; // Only server-side via Admin SDK or client-side recomputation
+    }
+
+    match /users/{userId}/metadata/{metadataId} {
+      // Admin can read all metadata for analytics
+      allow read: if isWeSplitAdmin();
+      allow read: if request.auth != null && request.auth.uid == userId;
+
+      // 🔒 SECURITY: Exclude badge_metrics — it has a dedicated rule above (server-only writes)
+      // Without this exclusion, the generic wildcard would override the specific deny
+      allow create, update: if request.auth != null && request.auth.uid == userId
+        && metadataId != 'badge_metrics';
+      allow delete: if false;
+    }
+
+    // User assets subcollection
+    match /users/{userId}/assets/{assetId} {
+      // Admin can read all assets for analytics
+      allow read: if isWeSplitAdmin();
+      allow read: if request.auth != null && request.auth.uid == userId;
+
+      allow create, update: if request.auth != null && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
+    // Christmas calendar subcollections
+    // 🔒 SECURITY: Calendar data is read-only for clients. Claims go through CFs.
+    match /users/{userId}/christmas_calendar/{dayId} {
+      allow read: if isWeSplitAdmin();
+      allow read: if request.auth != null && request.auth.uid == userId;
+      // Calendar day data is written server-side
+      allow write: if false;
+    }
+
+    match /users/{userId}/christmas_calendar_claims/{claimId} {
+      allow read: if isWeSplitAdmin();
+      allow read: if request.auth != null && request.auth.uid == userId;
+      // 🔒 SECURITY: Claims are server-side only to prevent claiming future days
+      // or claiming all 25 days at once
+      allow write: if false;
+    }
+
+    // Contacts collection - users can read/write their own contacts
+    match /contacts/{contactId} {
+      // Admin can read all contacts for analytics
+      allow read: if isWeSplitAdmin();
+      allow read: if request.auth != null &&
+        resource.data.user_id == request.auth.uid;
+
+      allow create: if request.auth != null &&
+        request.resource.data.user_id == request.auth.uid;
+
+      allow update, delete: if request.auth != null &&
+        resource.data.user_id == request.auth.uid;
+    }
+
+    // Transactions collection - users can read transactions they're involved in
+    match /transactions/{transactionId} {
+      // Admin can read all transactions for analytics dashboard
+      allow read: if isWeSplitAdmin();
+
+      // Users can read transactions where they are sender or recipient
+      allow read: if request.auth != null &&
+        (resource.data.from_user == request.auth.uid ||
+         resource.data.to_user == request.auth.uid);
+
+      // Users can create transactions where they are the sender
+      allow create: if request.auth != null &&
+        request.resource.data.from_user == request.auth.uid;
+
+      // Users can update transactions they're involved in
+      allow update: if request.auth != null &&
+        (resource.data.from_user == request.auth.uid ||
+         resource.data.to_user == request.auth.uid);
+
+      allow delete: if false;
+    }
+
+    // User transactions collection (transaction history)
+    match /user_transactions/{transactionId} {
+      // Admin can read all user transactions for analytics dashboard
+      allow read: if isWeSplitAdmin();
+
+      // Users can read their own transaction history
+      allow read: if request.auth != null &&
+        resource.data.user_id == request.auth.uid;
+
+      allow create: if request.auth != null &&
+        request.resource.data.user_id == request.auth.uid;
+
+      allow update: if request.auth != null &&
+        resource.data.user_id == request.auth.uid;
+
+      allow delete: if false;
+    }
+
+    // Splits collection (ARCHIVED feature — SharedWallets is the active replacement)
+    // Reads: auth-only (many legacy query patterns, not worth refactoring)
+    // Writes: creator-only (prevents any authed user from tampering with other users' splits)
+    match /splits/{splitId} {
+      allow read: if isWeSplitAdmin();
+      allow read: if request.auth != null;
+
+      allow create: if request.auth != null &&
+        request.resource.data.creatorId == request.auth.uid;
+
+      // Only creators can update their own splits
+      allow update: if request.auth != null &&
+        resource.data.creatorId == request.auth.uid;
+
+      // Only creators can delete splits
+      allow delete: if request.auth != null &&
+        resource.data.creatorId == request.auth.uid;
+    }
+
+    // Points transactions collection — audit trail for all points awarded
+    // 🔒 SECURITY: Quest + transaction points go through Cloud Functions (Admin SDK)
+    // Badge/referral/matrica points still use client-side awardSeasonPoints with validated writes
+    match /points_transactions/{transactionId} {
+      // Admin can read all points transactions for analytics
+      allow read: if isWeSplitAdmin();
+
+      // Users can read their own points transactions (for points history UI)
+      allow read: if request.auth != null &&
+        resource.data.user_id == request.auth.uid;
+
+      // Validated client-side create for badge/referral/matrica award flows
+      // 🔒 SECURITY FIX 2D: quest_completion and transaction_reward REMOVED from client-writable sources.
+      // These must only be written server-side via Cloud Functions (Admin SDK bypasses rules).
+      // Allowing them here let a tampered client self-award quest/tx points.
+      // 🔒 SECURITY: admin_adjustment removed — only Admin SDK (CFs) can write it
+      // 🔒 SECURITY: Amount capped at 1000 to prevent abuse from tampered clients
+      allow create: if request.auth != null
+        && request.resource.data.user_id == request.auth.uid
+        && request.resource.data.amount is number
+        && request.resource.data.amount > 0
+        && request.resource.data.amount <= 1000
+        && request.resource.data.source in ['season_reward', 'referral_reward', 'badge_claim']
+        && request.resource.data.source_id is string
+        && request.resource.data.description is string
+        && request.resource.data.keys().hasAll(['user_id', 'amount', 'source', 'source_id', 'description', 'created_at']);
+
+      // No updates or deletes — audit trail is append-only
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // Shared wallets collection
+    // Read: restricted to creator + members (🔒 SECURITY FIX P2-2)
+    // Write: restricted to creator/members (see below)
+    // Sensitive data (private keys) lives in splitWalletPrivateKeys with stricter rules
+    match /sharedWallets/{sharedWalletId} {
+      // Admin can read all shared wallets for analytics dashboard
+      allow read: if isWeSplitAdmin();
+
+      // 🔒 SECURITY FIX P1-2 (COMPLETED): Client-side queries REMOVED
+      // getUserSharedWallets now uses Cloud Function getUserSharedWalletsServer
+      // This prevents enumeration attacks - users can only query their own wallets server-side
+      //
+      // NO allow list rule = client CANNOT query this collection
+      // Only direct document reads allowed (via allow get below)
+
+      // Web uses client-side queries (mobile uses Cloud Function).
+      // array-contains ensures users can only list wallets they're members of.
+      allow list: if request.auth != null &&
+        request.auth.uid in resource.data.memberIds;
+
+
+      // 🔒 SECURITY: Only creator and members can read individual shared wallet documents
+      allow get: if request.auth != null &&
+        (resource.data.creatorId == request.auth.uid ||
+         request.auth.uid in resource.data.memberIds);
+
+      // Users can create wallets where they are the creator and included in memberIds
+      allow create: if request.auth != null &&
+        request.resource.data.creatorId == request.auth.uid &&
+        request.auth.uid in request.resource.data.memberIds;
+
+      // Creator can update settings, members, customization — but NOT balance fields.
+      // Balance fields (totalBalance, totalDeposited, totalWithdrawn, etc.) are only
+      // writable by Admin SDK (Cloud Functions) to prevent client-side balance manipulation.
+      // The withdrawal function pre-checks totalBalance before on-chain transfer, so a
+      // tampered client setting totalBalance high could steal funds.
+      // 🔒 SECURITY FIX Y-1: Added yield fields to blocked keys.
+      // Yield state (yieldEnabled, yieldPrincipalUsdc, yieldTokenAmount, etc.) must only
+      // be written by Cloud Functions (Admin SDK) — a tampered client could manipulate
+      // yield accounting to steal funds or create inconsistent on-chain/off-chain state.
+      allow update: if request.auth != null &&
+        resource.data.creatorId == request.auth.uid &&
+        !request.resource.data.diff(resource.data).affectedKeys()
+          .hasAny(['totalBalance', 'totalDeposited', 'totalWithdrawn', 'balance', 'availableBalance',
+                   'yieldEnabled', 'yieldStrategy', 'yieldPrincipalUsdc', 'yieldTokenAmount',
+                   'yieldTokenMint', 'yieldEarnedUsdc', 'yieldTotalHarvested', 'yieldEnabledAt', 'yieldLastCheckpoint',
+                   'yieldOperationInProgress', 'yieldOperationLockedAt']);
+
+      // Members can update ONLY allocatedBalance + updatedAt (for expense creation).
+      // All other member operations go through Cloud Functions (Admin SDK).
+      // 🔒 SECURITY FIX P2-3: Validate allocatedBalance updates (type + non-negative)
+      // Note: allocatedBalance CAN exceed totalBalance — this represents "underfunded" expenses
+      // which are a valid business case (expense recorded before wallet is funded).
+      allow update: if request.auth != null &&
+        request.auth.uid in resource.data.memberIds &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['allocatedBalance', 'updatedAt']) &&
+        request.resource.data.allocatedBalance is number &&
+        request.resource.data.allocatedBalance >= 0;
+
+      // 🔒 SECURITY FIX: REMOVED client-side totalBalance write permission
+      // This rule previously allowed members to write arbitrary balance values - CRITICAL VULNERABILITY!
+      // Balance updates now MUST go through Cloud Functions for proper validation.
+      // Client-side funding will be moved to Cloud Function (see Task #70).
+      // Reconciliation can still work via creator permission (line 331-332) or dedicated Cloud Function.
+
+      // Only creators can delete wallets
+      allow delete: if request.auth != null &&
+        resource.data.creatorId == request.auth.uid;
+    }
+
+    // Shared wallet transactions collection
+    // 🔒 SECURITY FIX P2-2: Scope read to wallet members only
+    match /sharedWalletTransactions/{transactionId} {
+      // Admin can read all for analytics dashboard
+      allow read: if isWeSplitAdmin();
+
+      // 🔒 SECURITY FIX P1-2 (COMPLETED): Client-side queries REMOVED
+      // getSharedWalletTransactions now uses Cloud Function getSharedWalletTransactionsServer
+      // NO allow list rule = client CANNOT query this collection
+
+      // ✅ Allow users to read individual transactions they created
+      allow get: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      // ✅ Allow individual reads if user is creator or member of the shared wallet
+      allow get: if request.auth != null &&
+        resource.data.sharedWalletFirebaseDocId != null &&
+        (get(/databases/$(database)/documents/sharedWallets/$(resource.data.sharedWalletFirebaseDocId)).data.creatorId == request.auth.uid ||
+         request.auth.uid in get(/databases/$(database)/documents/sharedWallets/$(resource.data.sharedWalletFirebaseDocId)).data.memberIds);
+
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid;
+
+      allow update: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow delete: if false;
+    }
+
+    // Shared wallet withdrawal requests collection
+    // Read restricted to: the requester, the wallet creator, or wallet members
+    match /sharedWalletWithdrawalRequests/{requestId} {
+      // Admin can read all withdrawal requests for analytics
+      allow read: if isWeSplitAdmin();
+
+      // 🔒 SECURITY FIX P1-2 (COMPLETED): Client-side queries REMOVED
+      // getWithdrawalRequests now uses Cloud Function getWithdrawalRequestsServer
+      // NO allow list rule = client CANNOT query this collection
+
+      // ✅ Allow individual reads by the requester
+      allow get: if request.auth != null &&
+        request.auth.uid == resource.data.userId;
+
+      // ✅ Allow wallet creator/members to read individual requests
+      // Uses sharedWalletFirebaseDocId (Firestore doc ID) for wallet lookup
+      allow get: if request.auth != null &&
+        resource.data.sharedWalletFirebaseDocId != null &&
+        (get(/databases/$(database)/documents/sharedWallets/$(resource.data.sharedWalletFirebaseDocId)).data.creatorId == request.auth.uid ||
+         request.auth.uid in get(/databases/$(database)/documents/sharedWallets/$(resource.data.sharedWalletFirebaseDocId)).data.memberIds);
+
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid;
+
+      // Only the wallet creator can approve/deny withdrawal requests
+      // Uses sharedWalletFirebaseDocId (Firestore doc ID) for wallet lookup
+      allow update: if request.auth != null &&
+        resource.data.sharedWalletFirebaseDocId != null &&
+        exists(/databases/$(database)/documents/sharedWallets/$(resource.data.sharedWalletFirebaseDocId)) &&
+        get(/databases/$(database)/documents/sharedWallets/$(resource.data.sharedWalletFirebaseDocId)).data.creatorId == request.auth.uid;
+
+      allow delete: if false;
+    }
+
+    // Shared wallet expenses collection
+    // 🔒 SECURITY FIX P2-2: Scope read to wallet members only
+    match /sharedWalletExpenses/{expenseId} {
+      // Admin can read all for analytics dashboard
+      allow read: if isWeSplitAdmin();
+
+      // 🔒 SECURITY NOTE P1-2: Expenses collection - list queries prevented
+      // Most expense queries happen via sharedWalletTransactions or direct reads
+      // If expense list queries are needed, move to Cloud Function
+      // For now: NO allow list rule = secure by default
+
+      // ✅ Allow users to read individual expenses they created
+      allow get: if request.auth != null &&
+        resource.data.createdBy == request.auth.uid;
+
+      // ✅ Allow individual reads if user is creator or member of the shared wallet
+      allow get: if request.auth != null &&
+        resource.data.sharedWalletFirebaseDocId != null &&
+        (get(/databases/$(database)/documents/sharedWallets/$(resource.data.sharedWalletFirebaseDocId)).data.creatorId == request.auth.uid ||
+         request.auth.uid in get(/databases/$(database)/documents/sharedWallets/$(resource.data.sharedWalletFirebaseDocId)).data.memberIds);
+
+      // Creator must be the authenticated user; required fields must be present.
+      // 🔒 SECURITY FIX S-6: Also verify the caller is a member of the referenced wallet.
+      // Without this check, any authenticated user could create expense records against
+      // wallets they don't belong to (data pollution / confusing the expense UI).
+      allow create: if request.auth != null &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.sharedWalletId is string &&
+        request.resource.data.amount is number &&
+        request.resource.data.amount > 0 &&
+        request.resource.data.sharedWalletFirebaseDocId is string &&
+        request.auth.uid in get(/databases/$(database)/documents/sharedWallets/$(request.resource.data.sharedWalletFirebaseDocId)).data.memberIds;
+
+      // Only the creator can update; immutable fields cannot change
+      allow update: if request.auth != null &&
+        resource.data.createdBy == request.auth.uid &&
+        request.resource.data.createdBy == resource.data.createdBy &&
+        request.resource.data.sharedWalletId == resource.data.sharedWalletId &&
+        request.resource.data.id == resource.data.id;
+
+      allow delete: if request.auth != null &&
+        resource.data.createdBy == request.auth.uid;
+    }
+
+    // Payment requests
+    match /paymentRequests/{requestId} {
+      // Admin can read all payment requests for analytics
+      allow read: if isWeSplitAdmin();
+
+      allow read: if request.auth != null &&
+        (resource.data.recipientId == request.auth.uid ||
+         resource.data.senderId == request.auth.uid);
+
+      allow create: if request.auth != null &&
+        request.resource.data.senderId == request.auth.uid;
+
+      allow update: if request.auth != null &&
+        (resource.data.recipientId == request.auth.uid ||
+         resource.data.senderId == request.auth.uid);
+
+      allow delete: if false;
+    }
+
+    // Notifications — server writes via Admin SDK (bypasses rules),
+    // web/TG clients create directly for the target user.
+    match /notifications/{notificationId} {
+      allow read: if isWeSplitAdmin();
+      // Accept both userId (camelCase) and user_id (snake_case) for cross-platform compat
+      allow read: if request.auth != null &&
+        (resource.data.userId == request.auth.uid || resource.data.user_id == request.auth.uid);
+      // Allow authenticated users to create notifications only for themselves
+      // (server-side Admin SDK bypasses rules for cross-user notifications)
+      allow create: if request.auth != null &&
+        (request.resource.data.userId == request.auth.uid || request.resource.data.user_id == request.auth.uid);
+      allow update, delete: if request.auth != null &&
+        (resource.data.userId == request.auth.uid || resource.data.user_id == request.auth.uid);
+    }
+
+    // =============================================================================
+    // DEVICE & WALLET BACKUP COLLECTIONS
+    // =============================================================================
+
+    // Wallet backups - users can only access their own encrypted backups
+    // NOTE: Admin should NOT have read access to wallet backups
+    match /wallet_backups/{backupId} {
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid;
+
+      allow update: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow delete: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+    }
+
+    // =============================================================================
+    // SERVER-ONLY COLLECTIONS (Admin SDK only — deny all client access)
+    // =============================================================================
+
+    // Auth nonces for SIWS — created/consumed by API routes via Admin SDK
+    match /auth_nonces/{nonceId} {
+      allow read, write: if false;
+    }
+
+    // Account linking OTPs — managed by API routes via Admin SDK
+    match /account_link_otps/{otpId} {
+      allow read, write: if false;
+    }
+
+    // Wallet transfer sessions — managed by API routes via Admin SDK
+    match /wallet_transfer_sessions/{sessionId} {
+      allow read, write: if false;
+    }
+
+    // User devices
+    match /userDevices/{deviceId} {
+      // Admin can read all devices for analytics dashboard
+      allow read: if isWeSplitAdmin();
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid;
+
+      allow update: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow delete: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+    }
+
+    // Phantom split participants
+    match /phantom_split_participants/{participantId} {
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid;
+
+      allow update: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow delete: if false;
+    }
+
+    // External wallets subcollection under users
+    match /users/{userId}/externalWallets/{walletId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create, update: if request.auth != null && request.auth.uid == userId;
+      allow delete: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // =============================================================================
+    // ADMIN DASHBOARD ANALYTICS COLLECTIONS
+    // These collections are queried by the admin dashboard for metrics
+    // =============================================================================
+
+    // MoonPay transactions - admin read only (queried by dashboard)
+    match /moonpay_transactions/{transactionId} {
+      allow read: if isWeSplitAdmin();
+      allow write: if false;
+    }
+
+    // x402 data is stored as fields on regular transaction documents (x402_* prefix).
+    // No separate x402Transactions collection is needed.
+
+    // Waitlist - admin can read, public can create
+    match /Waitlist/{docId} {
+      allow read: if isWeSplitAdmin();
+      allow create: if true;
+      allow update, delete: if false;
+    }
+
+    // Partnership Requests - public can create (API access request form)
+    // Admin can read all + update (approve/reject)
+    // Public can read to check own request status via email query (DocsGate)
+    // Collection contains only contact info (company, name, email, use case) — no secrets
+    match /PartnershipRequests/{docId} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if isWeSplitAdmin();
+      allow delete: if false;
+    }
+
+    // Crashes (logs) - admin can read, anyone can create
+    match /crashes/{crashId} {
+      allow read: if isWeSplitAdmin();
+      allow create: if true;
+      allow update, delete: if false;
+    }
+
+    // Withdrawal requests - admin can read all
+    match /withdrawalRequests/{requestId} {
+      allow read: if isWeSplitAdmin();
+      allow read: if request.auth != null &&
+        resource.data.user_id == request.auth.uid;
+      // 🔒 SECURITY FIX P3-3: Validate user_id to prevent creating requests for other users
+      allow create: if request.auth != null &&
+        request.resource.data.user_id == request.auth.uid;
+      allow update: if isWeSplitAdmin();
+      allow delete: if false;
+    }
+
+    // Reminders — scoped to owner
+    match /reminders/{reminderId} {
+      allow read: if isWeSplitAdmin();
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid;
+      allow update, delete: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+    }
+
+    // =============================================================================
+    // SPEND INTEGRATION COLLECTIONS
+    // These collections are primarily accessed via Firebase Admin SDK (bypasses rules)
+    // Admin dashboard can read for analytics
+    // =============================================================================
+
+    // API Keys collection - Admin-only access (server-side only)
+    match /apiKeys/{apiKeyId} {
+      allow read: if isWeSplitAdmin();
+      allow write: if false; // Admin SDK bypasses this
+    }
+
+    // Pending invitations
+    match /pending_invitations/{inviteId} {
+      allow read: if isWeSplitAdmin();
+      allow read: if request.auth != null &&
+        request.auth.token.email == resource.data.email;
+
+      allow create, update, delete: if false; // Admin SDK bypasses this
+    }
+
+    // Invite batches
+    match /invite_batches/{batchId} {
+      allow read: if isWeSplitAdmin();
+      allow write: if false; // Admin SDK bypasses this
+    }
+
+    // Webhook logs
+    match /webhook_logs/{logId} {
+      allow read: if isWeSplitAdmin();
+      allow write: if false; // Admin SDK bypasses this
+    }
+
+    // SPEND webhook received
+    match /spend_webhook_received/{logId} {
+      allow read: if isWeSplitAdmin();
+      allow write: if false; // Admin SDK bypasses this
+    }
+
+    // SPEND webhook logs
+    match /spend_webhook_logs/{logId} {
+      allow read: if isWeSplitAdmin();
+      allow write: if false; // Admin SDK bypasses this
+    }
+
+    // Linked wallets
+    match /linkedWallets/{walletId} {
+      allow read: if isWeSplitAdmin();
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow create, update, delete: if false; // Admin SDK bypasses this
+    }
+
+    // Rate limits
+    match /rateLimits/{limitId} {
+      allow read: if isWeSplitAdmin();
+      allow write: if false; // Admin SDK bypasses this
+    }
+
+    // Phantom users collection — scoped writes to own user
+    // 🔒 SECURITY FIX M-12: Restrict reads to the document owner and admins.
+    // Previously any authenticated user could read any phantom user document,
+    // enabling user enumeration / wallet address harvesting.
+    // NOTE: The `id` field is the Phantom SDK auth ID (NOT the Firebase UID).
+    // The `firebaseUserId` field links to the Firebase Auth user. Rules check
+    // firebaseUserId to authorize access, since that matches request.auth.uid.
+    match /phantom_users/{phantomUserId} {
+      // Read: owner (by firebaseUserId) or admin
+      allow read: if isWeSplitAdmin() ||
+        (request.auth != null && resource.data.firebaseUserId == request.auth.uid);
+
+      // Create: authenticated user. If firebaseUserId is set, it must match auth.uid.
+      // Some legacy flows create the doc before Firebase Auth is established, so
+      // firebaseUserId may be absent on the initial create.
+      allow create: if request.auth != null &&
+        (!('firebaseUserId' in request.resource.data) ||
+         request.resource.data.firebaseUserId == request.auth.uid);
+
+      // Update: must be the Firebase-linked owner
+      allow update: if request.auth != null &&
+        (resource.data.firebaseUserId == request.auth.uid ||
+         request.resource.data.firebaseUserId == request.auth.uid);
+      allow delete: if false;
+    }
+
+    // =============================================================================
+    // BROWSER EXTENSION QR CODE AUTHENTICATION
+    // =============================================================================
+
+    // QR Sessions
+    // 🔒 SECURITY FIX P0-1: Lock down to prevent session hijacking
+    // Browser extension creates session, mobile app approves (authenticated)
+    // Session ID must be unpredictable (generated server-side or client-side with crypto.randomUUID)
+    match /qr_sessions/{sessionId} {
+      // 🔒 SECURITY FIX C-6: Require authentication to create QR sessions.
+      // Unauthenticated creation allows any actor to pre-create sessions and
+      // monitor for approval (session hijacking). The browser extension should
+      // either be authenticated or use a Cloud Function to create sessions.
+      allow create: if request.auth != null;
+
+      // Only authenticated users can read QR sessions
+      // TODO: Further scope to session creator/approver once we add userId tracking
+      allow read: if request.auth != null;
+
+      // 🔒 SECURITY FIX C-6: Validate that only the session creator can update.
+      // Prevents a different authenticated user from hijacking and approving a session
+      // they did not create.
+      allow update: if request.auth != null && resource.data.creatorId == request.auth.uid;
+
+      // 🔒 SECURITY FIX M-8: Only session creator can delete
+      allow delete: if request.auth != null && resource.data.creatorId == request.auth.uid;
+    }
+
+    // Passkey challenges
+    // 🔒 SECURITY FIX P0-2: Lock down to prevent challenge manipulation/replay attacks
+    // Best practice: Move challenge generation to Cloud Function (server-side only)
+    // For now: require authentication for all operations
+    match /challenges/{challengeId} {
+      // Only authenticated users can create challenges
+      // TODO: Move to Cloud Function to ensure server-generated nonces
+      allow create: if request.auth != null;
+
+      // Only authenticated users can read challenges
+      // TODO: Scope to challenge owner once userId tracking is added
+      allow read: if request.auth != null;
+
+      // Updates not allowed (challenges are immutable)
+      allow update: if false;
+
+      // 🔒 SECURITY FIX M-8: Only challenge creator can delete (prevents cleanup of others' challenges)
+      allow delete: if request.auth != null;
+      // Note: challenges don't track userId yet — scoping deferred until Cloud Function migration
+    }
+
+    // Passkeys - NOTE: Admin should NOT have read access to passkey credentials
+    match /passkeys/{passkeyId} {
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid;
+
+      allow update: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow delete: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+    }
+
+    // Email verification codes for browser extension login
+    // 🔒 SECURITY FIX P1-1: Scope to email owner to prevent auth bypass
+    // Previously ANY authenticated user could read/modify ANY verification code
+    match /verification_codes/{codeId} {
+      // 🔒 SECURITY FIX C-5 (duplicate): Same fix as /verificationCodes — require auth to create.
+      // Unauthenticated creation enables DoS / storage abuse from the browser extension flow.
+      allow create: if request.auth != null;
+      // Only the email owner can read their verification codes
+      allow read: if request.auth != null &&
+        resource.data.email == request.auth.token.email;
+      // Only the email owner can update/delete their codes
+      allow update, delete: if request.auth != null &&
+        resource.data.email == request.auth.token.email;
+    }
+
+    // Connected devices
+    match /connected_devices/{deviceId} {
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow create: if false; // Admin SDK bypasses this
+      allow update: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+      allow delete: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+    }
+
+    // =============================================================================
+    // REMOTE TRANSACTION SIGNING (ADDON -> MOBILE)
+    // =============================================================================
+
+    // Transaction Signing Requests
+    match /transactionSigningRequests/{requestId} {
+      allow read: if isWeSplitAdmin();
+      allow read: if request.auth != null &&
+        (resource.data.userId == request.auth.uid ||
+         resource.data.requesterId == request.auth.uid);
+
+      // 🔒 SECURITY FIX P2-5: Validate requester identity to prevent spoofing
+      // Without this, user A could create requests claiming to be from user B
+      allow create: if request.auth != null &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.expiresAt != null &&
+        request.resource.data.requesterId == request.auth.uid;
+
+      allow update: if request.auth != null &&
+        resource.data.userId == request.auth.uid &&
+        resource.data.status == 'pending';
+
+      allow update: if request.auth != null &&
+        resource.data.requesterId == request.auth.uid &&
+        resource.data.status == 'pending' &&
+        request.resource.data.status == 'cancelled';
+
+      allow delete: if request.auth != null &&
+        (resource.data.userId == request.auth.uid ||
+         resource.data.requesterId == request.auth.uid);
+    }
+
+    // Transaction Signing Approvals - immutable audit trail
+    match /transactionSigningApprovals/{approvalId} {
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid;
+
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // =============================================================================
+    // BACKEND-ONLY COLLECTIONS (Admin SDK bypasses rules)
+    // Explicit deny-all to prevent any client-side access
+    // =============================================================================
+
+    // Webhook signing secrets - SENSITIVE: never expose to clients
+    match /webhookSecrets/{secretId} {
+      allow read, write: if false;
+    }
+
+    // Transaction hash dedup records - server-side only
+    match /transactionHashes/{hashId} {
+      allow read: if isWeSplitAdmin();
+      allow write: if false;
+    }
+
+    // Phone auth sessions - server-side auth flow
+    match /phoneAuthSessions/{sessionId} {
+      allow read, write: if false;
+    }
+
+    // Phone link sessions - server-side auth flow
+    match /phoneLinkSessions/{sessionId} {
+      allow read, write: if false;
+    }
+
+    // Mobile Wallet Adapter verifications - server-side only
+    match /mwaVerifications/{verificationId} {
+      allow read, write: if false;
+    }
+
+    // 🔒 SECURITY FIX P1-4: MWA challenges - server-side only (prevent replay attacks)
+    // Nonces are generated server-side and tracked to prevent reuse
+    match /mwaChallenges/{nonceId} {
+      allow read, write: if false; // Only server-side via Admin SDK
+    }
+
+    // Wallet link records - server-side only
+    match /wallet_links/{linkId} {
+      allow read: if isWeSplitAdmin();
+      allow write: if false;
+    }
+
+    // Security audit logs - admin read for dashboard, server-side write
+    match /securityLogs/{logId} {
+      allow read: if isWeSplitAdmin();
+      allow write: if false;
+    }
+
+    // Wallet management event logs (camelCase variant)
+    match /walletManagementEvents/{eventId} {
+      allow read: if isWeSplitAdmin();
+      allow write: if false;
+    }
+
+    // Wallet management event logs (snake_case variant)
+    match /wallet_management_events/{eventId} {
+      allow read: if isWeSplitAdmin();
+      allow write: if false;
+    }
+
+    // Split participants - server-side only
+    match /participants/{participantId} {
+      allow read: if isWeSplitAdmin();
+      allow write: if false;
+    }
+
+    // =============================================================================
+    // X402 SETTLEMENT COLLECTIONS (Admin SDK / Cloud Functions only)
+    // =============================================================================
+
+    // x402 pending settlements — persistent retry queue for failed settlements
+    // Client creates documents on settlement failure; Cloud Functions process retries
+    // Read: authenticated users can read their own pending settlements
+    // Create: authenticated users can create (when client-side retries are exhausted)
+    // Update/Delete: Admin SDK only (Cloud Functions manage retries + status)
+    match /x402_pending_settlements/{docId} {
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.attempts == 0 &&
+        request.resource.data.authorizationId is string &&
+        request.resource.data.transactionSignature is string &&
+        request.resource.data.network is string &&
+        request.resource.data.usdcMint is string &&
+        request.resource.data.amount is string &&
+        request.resource.data.recipientAddress is string;
+      allow update, delete: if false; // Admin SDK only — Cloud Functions manage retries
+    }
+
+    // =============================================================================
+    // YIELD COLLECTIONS (Admin SDK / Cloud Functions only)
+    // All yield reads and writes go through Cloud Functions — no client access
+    // =============================================================================
+
+    // Yield positions — one doc per shared wallet, written by enableWalletYield CF
+    match /yieldPositions/{docId} {
+      allow read, write: if false;
+    }
+
+    // Yield transactions — append-only audit trail, written by yield CFs
+    match /yieldTransactions/{docId} {
+      allow read, write: if false;
+    }
+
+    // =============================================================================
+    // SHARED WALLET INTERNAL COLLECTIONS (Admin SDK only)
+    // 🔒 Added during security audit — explicit deny-all for defense in depth
+    // =============================================================================
+
+    // Withdrawal idempotency records - server-side only
+    match /sharedWalletWithdrawalIdempotency/{docId} {
+      allow read, write: if false;
+    }
+
+    // Funding idempotency records - server-side only
+    match /sharedWalletFundingIdempotency/{docId} {
+      allow read, write: if false;
+    }
+
+    // Pending withdrawal verifications (M-5 timeout handling) - server-side only
+    match /pendingWithdrawalVerifications/{docId} {
+      allow read: if isWeSplitAdmin();
+      allow write: if false;
+    }
+
+    // System alerts (ops team notifications) - admin read only
+    match /systemAlerts/{alertId} {
+      allow read: if isWeSplitAdmin();
+      allow write: if false;
+    }
+
+    // Wallet pairing sessions (QR-based E2E encrypted relay for web<->mobile pairing)
+    // Same user on both devices — userId is the session creator
+    match /walletPairingSessions/{sessionId} {
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.status == 'pending';
+
+      // Mobile updates with encrypted payload + status changes
+      allow update: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow delete: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+    }
+
+    // =========================================================================
+    // TELEGRAM BOT COLLECTIONS
+    // =========================================================================
+
+    // telegramGroups — group metadata managed by the Telegram bot via Admin SDK.
+    // Client-side access: group members may read their own group data.
+    // All writes go through the bot (Admin SDK bypasses these rules).
+    match /telegramGroups/{groupId} {
+      // Allow read if the authenticated user is a member of the group.
+      // The groupId follows the pattern "tg_group_{chatId}" — members store
+      // their wesplit_user_id in the members array.
+      allow read: if request.auth != null &&
+        (
+          // Group member looking up their group
+          request.auth.uid in resource.data.get('member_user_ids', []) ||
+          // Admin can read all group data for analytics
+          isWeSplitAdmin()
+        );
+
+      // Writes are ONLY via bot (Firebase Admin SDK — bypasses client rules).
+      allow write: if false;
+    }
+
+    // telegramBotSessions — grammY session storage, server-only.
+    // These docs contain bot conversation state and must never be accessible
+    // from the client side.
+    match /telegramBotSessions/{sessionKey} {
+      allow read, write: if false;
+    }
+
+  }
+}
+

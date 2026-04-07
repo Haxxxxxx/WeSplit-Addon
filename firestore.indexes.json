@@ -1,0 +1,45 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "email", "order": "ASCENDING" },
+        { "fieldPath": "discoverable", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "name", "order": "ASCENDING" },
+        { "fieldPath": "discoverable", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "apiKeys",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "key", "order": "ASCENDING" },
+        { "fieldPath": "active", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "payment_records",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "splitId", "order": "ASCENDING" },
+        { "fieldPath": "transactionSignature", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "pending_invitations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "splitId", "order": "ASCENDING" },
+        { "fieldPath": "email", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
